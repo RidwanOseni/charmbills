@@ -1,0 +1,11 @@
+# Exclude the entire backend SDK and local environment
+charmbills-backend/
+
+# Also ensure common build artifacts and secrets are ignored
+.env
+.env.local
+*.log
+node_modules/
+.DS_Store
+.next/
+dist/

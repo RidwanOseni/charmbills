@@ -1,0 +1,27 @@
+{
+    "compilerOptions": {
+      /* Language & runtime */
+      "target": "ES2020",
+      "module": "commonjs",
+      "moduleResolution": "node",
+  
+      /* Interop & correctness */
+      "esModuleInterop": true,
+      "forceConsistentCasingInFileNames": true,
+      "strict": true,
+      "skipLibCheck": true,
+  
+      /* Paths & structure */
+      "baseUrl": ".",
+      "paths": {
+        "@/*": ["../*"]
+      },
+  
+      /* Output (optional for ts-node, required later) */
+      "outDir": "dist",
+      "resolveJsonModule": true
+    },
+    "include": ["src", "../shared"],
+    "exclude": ["node_modules", "dist"]
+  }
+  

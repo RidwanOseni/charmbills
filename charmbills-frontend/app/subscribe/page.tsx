@@ -1,20 +1,22 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import Navigation from "@/components/navigation"
 import { Button } from "@/components/ui/button"
 import type { Subscription } from "@/lib/types"
+import { useWallet } from "@/lib/WalletContext"
 
-export default function SubscribePage() {
+function SubscribeContent() {
   const searchParams = useSearchParams()
   const subscriptionId = searchParams.get("id")
-
   const [subscription, setSubscription] = useState<Subscription | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
   const [accessKey, setAccessKey] = useState("")
-  const [walletConnected, setWalletConnected] = useState(false)
+
+  // Use global wallet context
+  const { walletConnected, connectWallet } = useWallet()
 
   useEffect(() => {
     const saved = localStorage.getItem("charm_subscriptions")
@@ -26,8 +28,11 @@ export default function SubscribePage() {
   }, [subscriptionId])
 
   const handleSubscribe = () => {
+    if (!walletConnected) {
+      alert("Please connect your wallet first.")
+      return
+    }
     setIsProcessing(true)
-    // Simulate Bitcoin payment processing
     setTimeout(() => {
       const key = Math.random().toString(36).substring(2, 15).toUpperCase()
       setAccessKey(key)
@@ -36,99 +41,95 @@ export default function SubscribePage() {
     }, 2000)
   }
 
-  const handleWalletConnect = () => {
-    setWalletConnected(!walletConnected)
-  }
-
   if (!subscription) {
     return (
-      <>
+      <div className="min-h-screen bg-background text-foreground flex flex-col">
         <Navigation />
-        <main className="min-h-screen bg-gradient-to-b from-background to-card flex items-center justify-center">
-          <div className="text-center space-y-4">
-            <h1 className="text-2xl font-bold text-foreground">Subscription not found</h1>
+        <main className="flex-1 flex items-center justify-center p-4">
+          <div className="text-center">
+            <h1 className="text-2xl font-bold mb-2">Subscription not found</h1>
             <p className="text-muted-foreground">Please check the subscription link</p>
           </div>
         </main>
-      </>
+      </div>
     )
   }
 
   return (
-    <>
+    <div className="min-h-screen bg-background text-foreground flex flex-col">
       <Navigation />
-      <main className="min-h-screen bg-gradient-to-b from-background to-card">
-        <div className="max-w-2xl mx-auto px-4 py-20">
-          <div className="bg-card border border-border rounded-lg p-8 space-y-8">
-            {!isSuccess ? (
-              <>
-                <div className="flex items-center justify-between gap-4">
-                  <h1 className="text-3xl font-bold text-foreground">Subscribe to: {subscription.serviceName}</h1>
-                  <Button
-                    onClick={handleWalletConnect}
-                    size="sm"
-                    className={
-                      walletConnected
-                        ? "bg-accent/20 text-accent border border-accent"
-                        : "bg-accent hover:bg-accent/90 text-accent-foreground"
-                    }
-                    variant={walletConnected ? "outline" : "default"}
-                  >
-                    {walletConnected ? "✓ Wallet Connected" : "Connect Wallet"}
-                  </Button>
-                </div>
 
-                {/* Subscription Details */}
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <p className="text-muted-foreground">Price per {subscription.billingCycle.toLowerCase()}:</p>
-                    <p className="text-4xl font-bold text-accent">{subscription.priceBTC} BTC</p>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Payments will renew automatically every {subscription.billingCycle.toLowerCase()}
-                  </p>
-                </div>
-
-                {/* Subscribe Button */}
+      <main className="flex-1 flex items-center justify-center p-4 py-12">
+        <div className="max-w-md w-full bg-card border border-border rounded-2xl p-8 shadow-xl">
+          {!isSuccess ? (
+            <div className="space-y-8">
+              <div className="flex items-center justify-between gap-4">
+                <h1 className="text-2xl font-bold tracking-tight">Subscribe to: {subscription.serviceName}</h1>
                 <Button
-                  onClick={handleSubscribe}
-                  disabled={isProcessing}
-                  size="lg"
-                  className="w-full bg-accent hover:bg-accent/90 text-accent-foreground font-semibold py-6 text-lg rounded-lg transition-colors"
+                  onClick={connectWallet}
+                  size="sm"
+                  className={
+                    walletConnected
+                      ? "bg-accent/20 text-accent border border-accent"
+                      : "bg-accent hover:bg-accent/90 text-accent-foreground"
+                  }
+                  variant={walletConnected ? "outline" : "default"}
                 >
-                  {isProcessing ? "Processing Payment..." : "Subscribe with Bitcoin"}
+                  {walletConnected ? "✓ Wallet Connected" : "Connect Wallet"}
                 </Button>
-              </>
-            ) : (
-              <>
-                {/* Success Message */}
-                <div className="space-y-4 text-center py-8">
-                  <div className="text-5xl">✓</div>
-                  <h2 className="text-3xl font-bold text-foreground">Payment Successful!</h2>
-                  <p className="text-muted-foreground">Your subscription is now active</p>
-                </div>
+              </div>
 
-                {/* Access Key */}
-                <div className="bg-muted/20 border border-border rounded-lg p-6 space-y-2">
-                  <p className="text-sm text-muted-foreground">Your Access Key:</p>
-                  <p className="text-2xl font-mono font-bold text-accent text-center break-all">{accessKey}</p>
-                  <p className="text-xs text-muted-foreground text-center">Save this key for your records</p>
+              <div className="bg-muted/50 rounded-xl p-6 space-y-4">
+                <div className="flex justify-between items-end">
+                  <span className="text-muted-foreground">Price per {subscription.billingCycle.toLowerCase()}:</span>
+                  <span className="text-3xl font-bold text-accent">{subscription.priceBTC} BTC</span>
                 </div>
+                <div className="pt-4 border-t border-border/50 text-sm text-muted-foreground text-center">
+                  Payments will renew automatically every {subscription.billingCycle.toLowerCase()}
+                </div>
+              </div>
 
-                {/* Return Button */}
-                <Button
-                  onClick={() => (window.location.href = "/dashboard")}
-                  variant="outline"
-                  size="lg"
-                  className="w-full"
-                >
-                  Return to Dashboard
-                </Button>
-              </>
-            )}
-          </div>
+              <Button
+                onClick={handleSubscribe}
+                disabled={isProcessing}
+                size="lg"
+                className="w-full bg-accent hover:bg-accent/90 text-accent-foreground font-semibold py-6 text-lg rounded-lg transition-colors"
+              >
+                {isProcessing ? "Processing Payment..." : "Subscribe with Bitcoin"}
+              </Button>
+            </div>
+          ) : (
+            <div className="text-center space-y-6 animate-in fade-in zoom-in duration-300">
+              <div className="w-20 h-20 bg-accent/20 text-accent rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-4xl">✓</span>
+              </div>
+              <div>
+                <h1 className="text-3xl font-bold mb-2">Payment Successful!</h1>
+                <p className="text-muted-foreground">Your subscription is now active</p>
+              </div>
+
+              <div className="bg-muted p-4 rounded-lg font-mono break-all">
+                <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider font-sans">Your Access Key:</p>
+                <p className="text-lg font-bold text-foreground tracking-widest">{accessKey}</p>
+              </div>
+
+              <p className="text-sm text-muted-foreground italic">Save this key for your records</p>
+
+              <Button onClick={() => (window.location.href = "/dashboard")} variant="outline" size="lg" className="w-full">
+                Return to Dashboard
+              </Button>
+            </div>
+          )}
         </div>
       </main>
-    </>
+    </div>
+  )
+}
+
+export default function SubscribePage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <SubscribeContent />
+    </Suspense>
   )
 }

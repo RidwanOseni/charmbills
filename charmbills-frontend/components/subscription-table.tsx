@@ -1,5 +1,5 @@
 "use client"
-import type { Subscription } from "@/lib/types"
+import type { Subscription } from "@shared/types";
 import Link from "next/link"
 import { Copy, Trash2 } from "lucide-react"
 import { useState } from "react"

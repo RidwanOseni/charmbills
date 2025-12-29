@@ -1,188 +1,178 @@
 import axios from 'axios';
 import * as dotenv from 'dotenv';
-import path from 'path';
-import { SpellRequest } from '@/shared/types';
-import * as constants from '@/shared/constants';
-import { fetchPrevTxHex as fetchNftMintHex, buildMintNFT } from './buildMintNFT';
-import { fetchPrevTxHex as fetchTokenMintHex, buildMintToken } from './buildMintToken';
+import { SpellRequest, ProverResult } from '../../../shared/types';
+import * as constants from '../../../shared/constants';
+import { buildMintNFT } from './buildMintNFT';
+import { buildMintToken } from './buildMintToken';
 
-// Load environment variables
-dotenv.config({ path: path.resolve(__dirname, '../../../backend/.env') });
-
-const PROVER_API_URL = process.env.PROVER_API_URL || constants.PROVER_API_URL;
-const APP_BINARY_BASE64 = process.env.APP_BINARY_BASE64;
-
-interface ProveResponse {
-  commitTxHex: string;
-  spellTxHex: string;
-}
+dotenv.config();
 
 export async function generateUnsignedTransactions(
-  request: SpellRequest
-): Promise<ProveResponse> {
-  if (!PROVER_API_URL) {
-    throw new Error("PROVER_API_URL is not set in environment variables.");
+  request: SpellRequest,
+  prevTxHexes: string[] // Changed from string to string[]
+): Promise<ProverResult> {
+  // ========== IMMEDIATE DEBUGGING AT FUNCTION ENTRY ==========
+  console.log('\n[DEBUG] ===== START generateUnsignedTransactions =====');
+  console.log('[DEBUG] Function called with parameters:');
+  console.log('[DEBUG] Request type:', request.type);
+  console.log('[DEBUG] Request fundingUtxo:', request.fundingUtxo);
+  console.log('[DEBUG] prevTxHexes parameter:', prevTxHexes);
+  console.log('[DEBUG] prevTxHexes typeof:', typeof prevTxHexes);
+  console.log('[DEBUG] prevTxHexes isArray:', Array.isArray(prevTxHexes));
+  console.log('[DEBUG] prevTxHexes === null:', prevTxHexes === null);
+  console.log('[DEBUG] prevTxHexes === undefined:', prevTxHexes === undefined);
+  
+  // Validate prevTxHexes parameter
+  if (prevTxHexes === undefined || prevTxHexes === null) {
+    console.error('[ERROR] prevTxHexes is null or undefined!');
+    throw new Error('prevTxHexes parameter is required');
+  }
+  
+  if (!Array.isArray(prevTxHexes)) {
+    console.error('[ERROR] prevTxHexes is not an array! Type:', typeof prevTxHexes);
+    throw new Error('prevTxHexes must be an array');
+  }
+  
+  console.log('[DEBUG] prevTxHexes length:', prevTxHexes.length);
+  
+  // Detailed element analysis
+  console.log('[DEBUG] === Element-by-element analysis ===');
+  for (let i = 0; i < prevTxHexes.length; i++) {
+    const element = prevTxHexes[i];
+    console.log(`  [${i}]:`);
+    console.log(`    Type: ${typeof element}`);
+    console.log(`    Value: ${element}`);
+    console.log(`    Is null: ${element === null}`);
+    console.log(`    Is undefined: ${element === undefined}`);
+    console.log(`    Is string: ${typeof element === 'string'}`);
+    console.log(`    Length: ${typeof element === 'string' ? element.length : 'N/A'}`);
+    console.log(`    First 30 chars: ${typeof element === 'string' ? element.substring(0, 30) + '...' : 'N/A'}`);
   }
 
-  let spellJson: any;
-  const prevTxs: Array<{ bitcoin: string }> = [];
+  const PROVER_URL = process.env.PROVER_API_URL || constants.PROVER_API_URL;
+  const APP_VK = process.env.HARDCODED_APP_VK || constants.HARDCODED_APP_VK;
+  const APP_BINARY = process.env.APP_BINARY_BASE64;
 
+  if (!PROVER_URL) throw new Error("PROVER_API_URL not configured.");
+  if (!APP_BINARY) throw new Error("APP_BINARY_BASE64 missing from .env.");
+
+  let spellJson: any;
   if (request.type === 'mint-nft') {
-    const { spell } = buildMintNFT(request);
-    spellJson = spell;
-    
-    const rawHex = fetchNftMintHex("NFT_AUTHORITY_UTXO_HEX");
-    const sanitizedHex = rawHex.replace(/[^0-9a-fA-F]/g, '');
-    prevTxs.push({ bitcoin: sanitizedHex });
-    
-    console.log(`NFT minting: Using NFT_AUTHORITY_UTXO_HEX (length: ${sanitizedHex.length})`);
-    
+    // This now uses the anchorValue we added to the shared types 
+    const result = buildMintNFT(request);
+    spellJson = result.spell;
   } else if (request.type === 'mint-token') {
-    const spell = buildMintToken(request);
-    spellJson = spell;
-    
-    const rawHex = fetchTokenMintHex("TOKEN_AUTHORITY_UTXO_HEX");
-    const sanitizedHex = rawHex.replace(/[^0-9a-fA-F]/g, '');
-    prevTxs.push({ bitcoin: sanitizedHex });
-    
-    console.log(`Token minting: Using TOKEN_AUTHORITY_UTXO_HEX (length: ${sanitizedHex.length})`);
-    console.log(`Spell JSON for token minting:`, JSON.stringify(spellJson, null, 2));
-    
+    spellJson = buildMintToken(request);
   } else {
     throw new Error(`Unsupported spell type: ${request.type}`);
   }
 
-  // Ensure version is 8
-  spellJson.version = 8;
-
-  const binaries: Record<string, string> = {};
-  if (APP_BINARY_BASE64) {
-    binaries[constants.HARDCODED_APP_VK] = APP_BINARY_BASE64;
-  }
+  // ========== SAFE PREPARATION OF prev_txs ==========
+  console.log('[DEBUG] === Preparing prev_txs array ===');
+  
+  // Create a safe version with validation
+  const safePrevTxs = prevTxHexes.map((hex, index) => {
+    console.log(`[DEBUG] Processing element ${index}:`, {
+      value: hex,
+      type: typeof hex,
+      isString: typeof hex === 'string',
+      isNull: hex === null,
+      isUndefined: hex === undefined
+    });
+    
+    // Validate each element before processing
+    if (hex === null || hex === undefined) {
+      console.error(`[ERROR] Element ${index} is null or undefined:`, hex);
+      throw new Error(`Element ${index} in prevTxHexes is null or undefined`);
+    }
+    
+    if (typeof hex !== 'string') {
+      console.error(`[ERROR] Element ${index} is not a string. Type:`, typeof hex);
+      throw new Error(`Element ${index} in prevTxHexes must be a string, got ${typeof hex}`);
+    }
+    
+    if (hex.trim().length === 0) {
+      console.error(`[ERROR] Element ${index} is an empty string`);
+      throw new Error(`Element ${index} in prevTxHexes is an empty string`);
+    }
+    
+    // Clean the hex string
+    const cleanedHex = hex.replace(/[^0-9a-fA-F]/g, '');
+    console.log(`[DEBUG] Element ${index} cleaned: ${cleanedHex.length} chars, first 30: ${cleanedHex.substring(0, 30)}...`);
+    
+    return { bitcoin: cleanedHex };
+  });
+  
+  console.log('[DEBUG] Successfully created safePrevTxs with', safePrevTxs.length, 'elements');
 
   const requestBody = {
     spell: spellJson,
-    binaries,
-    prev_txs: prevTxs,
-    chain: "bitcoin",
+    binaries: { [APP_VK]: APP_BINARY },
+    prev_txs: safePrevTxs, // Use the safe, validated array
+    chain: "bitcoin", 
     funding_utxo: request.fundingUtxo,
     funding_utxo_value: request.fundingUtxoValue,
     change_address: request.changeAddress,
-    fee_rate: request.feeRate
+    fee_rate: request.feeRate || constants.DEFAULT_FEE_RATE
   };
 
-  // Create truncated version for logging
-  const logBody = JSON.parse(JSON.stringify(requestBody));
-  if (logBody.binaries && Object.keys(logBody.binaries).length > 0) {
-    const firstKey = Object.keys(logBody.binaries)[0];
-    const binary = logBody.binaries[firstKey];
-    if (binary.length > 50) {
-      logBody.binaries[firstKey] = `${binary.substring(0, 50)}... [${binary.length} chars total]`;
-    }
-  }
-
-  console.log("--- FINAL Prover Request Payload (truncated binary) ---");
-  console.log(JSON.stringify(logBody, null, 2));
-  console.log("\n--- Sending to Prover API ---");
-  console.log(`URL: ${PROVER_API_URL}`);
+  // Debug the full request body (excluding large binary data)
+  console.log('[DEBUG] === Constructed requestBody ===');
+  console.log('[DEBUG] requestBody.prev_txs length:', requestBody.prev_txs.length);
+  console.log('[DEBUG] requestBody.prev_txs:', JSON.stringify(requestBody.prev_txs.map(tx => ({
+    bitcoin: `${tx.bitcoin.substring(0, 30)}... (${tx.bitcoin.length} chars)`
+  })), null, 2));
+  console.log('[DEBUG] requestBody.funding_utxo:', requestBody.funding_utxo);
+  console.log('[DEBUG] requestBody.funding_utxo_value:', requestBody.funding_utxo_value);
+  console.log('[DEBUG] requestBody.change_address:', requestBody.change_address);
+  console.log('[DEBUG] requestBody.fee_rate:', requestBody.fee_rate);
 
   try {
-    const response = await axios.post(PROVER_API_URL, requestBody, {
+    console.log('[DEBUG] === Sending request to Prover API ===');
+    console.log('[DEBUG] Prover URL:', PROVER_URL);
+    console.log('[DEBUG] Request body size:', JSON.stringify(requestBody).length, 'bytes');
+    
+    const response = await axios.post(PROVER_URL, requestBody, {
       headers: { 'Content-Type': 'application/json' },
-      timeout: 300000 // 5 minutes timeout for proving
+      timeout: 300000 // 5-minute timeout for ZK proof generation 
     });
 
-    console.log("\n=== DEBUG: Prover API Response ===");
-    console.log("Response status:", response.status);
-    console.log("Response data type:", typeof response.data);
-    
-    let commitTxHex: string;
-    let spellTxHex: string;
+    console.log('[DEBUG] === Received response from Prover API ===');
+    console.log('[DEBUG] Response status:', response.status);
+    console.log('[DEBUG] Response data type:', typeof response.data);
+    console.log('[DEBUG] Response is array:', Array.isArray(response.data));
     
     if (Array.isArray(response.data)) {
-      console.log("Response array length:", response.data.length);
-      console.log("Response data sample:", JSON.stringify(response.data).substring(0, 200));
-      
-      if (response.data.length >= 2) {
-        const firstElem = response.data[0];
-        const secondElem = response.data[1];
-        
-        // Extract hex based on actual structure received
-        if (typeof firstElem === 'object' && firstElem !== null && 'bitcoin' in firstElem) {
-          commitTxHex = firstElem.bitcoin;
-          spellTxHex = secondElem.bitcoin;
-          console.log("Extracted hex from object format");
-        } else if (typeof firstElem === 'string') {
-          commitTxHex = firstElem;
-          spellTxHex = secondElem;
-          console.log("Extracted hex from string format");
-        } else {
-          console.error("Unknown array element type:", typeof firstElem);
-          console.error("First element:", firstElem);
-          throw new Error("Unknown response format in array");
-        }
-      } else {
-        console.error("Response array too short:", response.data);
-        throw new Error(`Prover API returned array with only ${response.data.length} elements, expected 2`);
-      }
-    } else if (typeof response.data === 'object' && response.data !== null) {
-      console.log("Response object:", response.data);
-      console.log("Response object keys:", Object.keys(response.data));
-      throw new Error("Unexpected object response format");
+      const [commitTxHex, spellTxHex] = response.data;
+      console.log('[DEBUG] commitTxHex length:', commitTxHex?.length);
+      console.log('[DEBUG] spellTxHex length:', spellTxHex?.length);
+      console.log('[DEBUG] ===== END generateUnsignedTransactions (SUCCESS) =====\n');
+      return { commitTxHex, spellTxHex };
     } else {
-      console.error("Unexpected response type:", typeof response.data);
-      console.error("Response data:", response.data);
-      throw new Error(`Prover API returned unexpected format: ${typeof response.data}`);
+      console.error('[ERROR] Prover API returned non-array response:', response.data);
+      throw new Error('Prover API returned invalid response format');
+    }
+  } catch (error: any) {
+    console.error('\n[DEBUG] ===== PROVER API ERROR =====');
+    console.error('[ERROR] Axios error:', error.message);
+    console.error('[ERROR] Error code:', error.code);
+    console.error('[ERROR] Error config:', error.config?.url);
+    
+    if (error.response) {
+      console.error('[ERROR] Response status:', error.response.status);
+      console.error('[ERROR] Response headers:', error.response.headers);
+      console.error('[ERROR] Response data:', error.response.data);
+    } else if (error.request) {
+      console.error('[ERROR] No response received. Request:', error.request);
     }
     
-    // Validate extracted hex values
-    if (typeof commitTxHex !== 'string' || typeof spellTxHex !== 'string') {
-      console.error("Invalid hex types:", { 
-        commitTxHex, 
-        spellTxHex,
-        commitTxType: typeof commitTxHex,
-        spellTxType: typeof spellTxHex
-      });
-      throw new Error("Prover API returned non-string transaction hexes.");
-    }
+    console.error('[DEBUG] ===== END generateUnsignedTransactions (ERROR) =====\n');
     
-    console.log("commitTxHex length:", commitTxHex.length);
-    console.log("spellTxHex length:", spellTxHex.length);
-    console.log("commitTxHex first 50 chars:", commitTxHex.substring(0, 50));
-    console.log("spellTxHex first 50 chars:", spellTxHex.substring(0, 50));
+    // Create a more informative error message
+    const errorMessage = error.response?.data 
+      ? `Prover API failed: ${JSON.stringify(error.response.data)}`
+      : `Prover API failed: ${error.message}`;
     
-    return { commitTxHex, spellTxHex };
-
-  } catch (error: unknown) {
-    console.error("\n❌ ERROR in generateUnsignedTransactions:");
-    
-    if (axios.isAxiosError(error)) {
-      console.error("Axios error:", error.message);
-      
-      if (error.response) {
-        console.error("Response status:", error.response.status);
-        console.error("Response headers:", error.response.headers);
-        console.error("Response data:", error.response.data);
-        
-        if (typeof error.response.data === 'string') {
-          console.error("Response data (raw):", error.response.data);
-        } else if (error.response.data && typeof error.response.data === 'object') {
-          console.error("Response data (JSON):", JSON.stringify(error.response.data, null, 2));
-        }
-        
-        throw new Error(`Prover API failed with status ${error.response.status}: ${JSON.stringify(error.response.data)}`);
-      } else if (error.request) {
-        console.error("No response received:", error.request);
-        throw new Error(`Prover API request failed: ${error.message}`);
-      }
-    }
-    
-    if (error instanceof Error) {
-      console.error("Error stack:", error.stack);
-      throw new Error(`Transaction proving failed: ${error.message}`);
-    }
-    
-    console.error("Unknown error type:", error);
-    throw new Error("Transaction proving failed: Unknown error");
+    throw new Error(errorMessage);
   }
 }

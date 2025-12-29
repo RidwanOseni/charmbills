@@ -52,7 +52,7 @@ async function mockSignAndBroadcast(requestType: string, commitTxHex: unknown, s
         commitTxHex: commitHex,
         spellTxHex: spellHex,
         status: 'pending', 
-        createdAt: new Date(),
+        createdAt: new Date().toISOString(),
     };
 }
 
@@ -61,7 +61,10 @@ async function runFlow(request: SpellRequest) {
     try {
         // 1. Generate Transactions
         console.log("Calling generateUnsignedTransactions...");
-        const { commitTxHex, spellTxHex } = await generateUnsignedTransactions(request);
+        
+        // FIX: Added the required second argument
+        const mockPrevTxHex = "02000000000101..."; // Placeholder for compilation
+        const { commitTxHex, spellTxHex } = await generateUnsignedTransactions(request, [mockPrevTxHex]);
         
         console.log(`\n=== DEBUG: Received from generateUnsignedTransactions ===`);
         console.log(`commitTxHex type: ${typeof commitTxHex}, length: ${commitTxHex?.length}`);

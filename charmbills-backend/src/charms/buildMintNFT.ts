@@ -40,7 +40,7 @@ export function buildMintNFT(
     request.type !== 'mint-nft' ||
     request.outputs.length !== 1 || // Should be exactly 1 output for NFT minting
     !request.anchorUtxo ||
-    !request.anchorValue  // NEW: We need anchorValue to calculate change
+    !request.anchorValue
   ) {
     throw new Error("Invalid request for dynamic NFT minting spell construction. Both anchorUtxo and anchorValue are required.");
   }
@@ -56,28 +56,21 @@ export function buildMintNFT(
   const inputUtxoId = request.anchorUtxo;
   const appId = deriveAppId(inputUtxoId); // appId is SHA256 of anchor UTXO [9]
 
-  // ========== IMPORTANT FIX: CALCULATE CHANGE ==========
-  // The anchor UTXO has a certain amount of satoshis (e.g., 10,000)
-  // We need to create a change output for the remaining satoshis after the NFT
-  
-  const anchorValue = request.anchorValue; // e.g., 10000 satoshis
+  // FIXED: Remove strict validation - let the prover handle balancing
+  const anchorValue = request.anchorValue;
   const nftSats = constants.MIN_OUTPUT_SATS; // NFT costs 1000 satoshis
-  const changeSats = anchorValue - nftSats; // e.g., 10000 - 1000 = 9000
   
-  console.log('[BUILDER] Calculating change:', {
+  console.log('[BUILDER] Anchor UTXO info:', {
     anchorValue,
     nftSats,
-    changeSats
+    willHaveChange: anchorValue > nftSats
   });
   
-  // Check if we have enough money
-  if (changeSats < 0) {
-    throw new Error(`Not enough money! Anchor UTXO has ${anchorValue} sats, but NFT needs ${nftSats} sats.`);
-  }
-  
-  // Warning if change is very small
-  if (changeSats < constants.MIN_OUTPUT_SATS) {
-    console.warn(`[WARNING] Change output (${changeSats} sats) is below dust limit. Consider using a larger anchor UTXO.`);
+  // FIXED: Only validate minimum, not equality
+  if (anchorValue < nftSats) {
+    throw new Error(
+      `Anchor UTXO must have at least ${nftSats} sats. Got ${anchorValue} sats.`
+    );
   }
 
   const spell = {
@@ -95,30 +88,28 @@ export function buildMintNFT(
         "charms": {} // Initial minting has no charms in input [6]
       }
     ],
-    // ========== FIXED: ADD CHANGE OUTPUT ==========
+    
     outs: [
       {
-        "address": nftOutput.address, // The NFT goes here
+        "address": nftOutput.address, // The NFT destination
         "charms": {
-          "$00": { // Metadata for the Plan NFT [5]
+          "$00": { 
             "ticker": nftOutput.nftMetadata.ticker || NFT_TICKER,
             "remaining": nftOutput.nftMetadata.remaining,
             "serviceName": nftOutput.nftMetadata.serviceName,
             "iconUrl": nftOutput.nftMetadata.iconUrl || 'https://charmbills.dev/pro.svg'
           }
         },
-        "sats": nftSats // NFT costs 1000 satoshis
-      },
-      {
-        "address": request.changeAddress, // CHANGE OUTPUT: Remaining money goes back to merchant
-        "charms": {}, // No charms in change output
-        "sats": changeSats // e.g., 9000 satoshis
+        // FIXED: Use the standard NFT output value (1000 sats)
+        // The prover will automatically add change outputs if needed
+        "sats": nftSats 
       }
     ]
   };
 
   console.log(`[BUILDER] Generated Dynamic NFT Spell for App ID: ${appId}`);
-  console.log(`[BUILDER] Transaction balanced: ${anchorValue} in = ${nftSats} (NFT) + ${changeSats} (change) sats`);
+  console.log(`[BUILDER] Spell structure: 1 input (${anchorValue} sats) → 1 output (${nftSats} sats)`);
+  console.log(`[BUILDER] Note: Prover will automatically balance transaction (add change if needed).`);
   
   return { spell, appId };
 }

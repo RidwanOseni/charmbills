@@ -51,7 +51,7 @@ export default function DashboardPage() {
     try {
       // 1. Fetch two distinct UTXOs to avoid double-spend conflict
       const anchorFunding = await getFundingUtxo(address, 1000); // Small UTXO for NFT identity
-      const feeFunding = await getFundingUtxo(address, 80000);   // Larger UTXO for transaction fees
+      const feeFunding = await getFundingUtxo(address, 50000);   // Larger UTXO for transaction fees
       
       if (!anchorFunding || !anchorFunding.utxoId || !anchorFunding.value) {
         throw new Error("Failed to get anchor funding UTXO. Please make sure your wallet has testnet BTC.");
@@ -142,7 +142,7 @@ export default function DashboardPage() {
   
       // 3. Pass both to your backend
       console.log("📡 Requesting unsigned transactions from backend...");
-      const response = await axios.post('http://localhost:3001/api/plans/mint', payload);
+      const response = await axios.post('http://localhost:3002/api/plans/mint', payload);
   
       // DEBUG: Log full response for troubleshooting
       console.group("[DEBUG] Backend Response");

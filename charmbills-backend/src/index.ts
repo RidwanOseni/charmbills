@@ -5,7 +5,7 @@ import { mintSubscriptionToken } from './api/subscriptions';
 import { broadcastPackage } from './api/broadcast-package';
 
 const app = express();
-const PORT = 3001;
+const PORT = 3002;
 
 app.use(cors()); // Allow frontend communication [19]
 app.use(express.json());

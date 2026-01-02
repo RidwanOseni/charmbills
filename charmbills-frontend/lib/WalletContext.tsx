@@ -76,6 +76,15 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         const psbtTx = new btc.Transaction();
         const decoded = btc.RawTx.decode(hexToBytes(rawHex));
 
+        // 1. Decode the actual anchor provenance (FIX IMPLEMENTED)
+        const anchorTx = btc.RawTx.decode(hexToBytes(dualUtxoContext.anchor.hex));
+        const [_, anchorVoutStr] = dualUtxoContext.anchor.utxoId.split(':');
+        const anchorVout = parseInt(anchorVoutStr);
+        const actualAnchorScript = anchorTx.outputs[anchorVout].script;
+        
+        console.log(`✅ Decoded anchor transaction: ${dualUtxoContext.anchor.utxoId}`);
+        console.log(`✅ Extracted actual anchor script: ${bytesToHex(actualAnchorScript)}`);
+
         decoded.outputs.forEach((out: any) => psbtTx.addOutput({ amount: out.amount, script: out.script }));
 
         decoded.inputs.forEach((input: any, index: number) => {
@@ -116,11 +125,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
                 console.log(`   📦 PRESERVING: Input ${index} assigned to ${isAnchor ? 'ANCHOR' : 'FEE'} context (Value: ${context.value} sats)`);
 
                 const preservedInput: any = {
-                    txid: isAnchor ? anchorTxid : (reversedTxid.toLowerCase() === targetTxid.toLowerCase() ? reversedTxid : rawTxid),
+                  txid: isAnchor ? anchorTxid : rawTxid,
                     index: input.index,
                     witnessUtxo: {
                         amount: BigInt(context.value),
-                        script: payment.script 
+                        // FIX: Use the actual script from the provenance hex, not your wallet script
+                        script: isAnchor ? actualAnchorScript : payment.script 
                     },
                     sequence: input.sequence
                 };
@@ -226,10 +236,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         taprootPublicKey
       );
 
-      const spellRes = await (window as any).LeatherProvider.request("signPsbt", { 
-        hex: spellPsbt, 
-        network: "testnet", 
-        broadcast: false 
+      const spellRes = await (window as any).LeatherProvider.request("signPsbt", {
+        hex: spellPsbt,
+        network: "testnet",
+        broadcast: false,
+        signAtIndex: 1
       });
 
       console.log('✅ Spell PSBT signed by wallet');
@@ -245,7 +256,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
       // 5. BROADCAST AS PACKAGE
       console.log('📤 Broadcasting transaction package...');
-      const broadcastResponse = await axios.post('http://localhost:3001/api/broadcast-package', {
+      const broadcastResponse = await axios.post('http://localhost:3002/api/broadcast-package', {
         transactions: [signedCommitHex, signedSpellHex]
       });
 

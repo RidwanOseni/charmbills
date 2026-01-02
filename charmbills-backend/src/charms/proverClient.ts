@@ -7,20 +7,27 @@ import { buildMintToken } from './buildMintToken';
 
 dotenv.config();
 
+/**
+ * Implements exponential backoff with jitter for retries
+ */
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function exponentialBackoffDelay(retryCount: number, baseDelay = 1000, maxDelay = 60000): number {
+  const exponentialDelay = baseDelay * Math.pow(2, retryCount);
+  const jitter = Math.random() * 1000; // Add up to 1 second jitter
+  return Math.min(exponentialDelay + jitter, maxDelay);
+}
+
+/**
+ * Generates unsigned transactions with robust retry logic as per Charms documentation
+ */
 export async function generateUnsignedTransactions(
   request: SpellRequest,
   prevTxHexes: string[] // Changed from string to string[]
 ): Promise<ProverResult> {
-  // ========== IMMEDIATE DEBUGGING AT FUNCTION ENTRY ==========
   console.log('\n[DEBUG] ===== START generateUnsignedTransactions =====');
-  console.log('[DEBUG] Function called with parameters:');
-  console.log('[DEBUG] Request type:', request.type);
-  console.log('[DEBUG] Request fundingUtxo:', request.fundingUtxo);
-  console.log('[DEBUG] prevTxHexes parameter:', prevTxHexes);
-  console.log('[DEBUG] prevTxHexes typeof:', typeof prevTxHexes);
-  console.log('[DEBUG] prevTxHexes isArray:', Array.isArray(prevTxHexes));
-  console.log('[DEBUG] prevTxHexes === null:', prevTxHexes === null);
-  console.log('[DEBUG] prevTxHexes === undefined:', prevTxHexes === undefined);
   
   // Validate prevTxHexes parameter
   if (prevTxHexes === undefined || prevTxHexes === null) {
@@ -34,20 +41,6 @@ export async function generateUnsignedTransactions(
   }
   
   console.log('[DEBUG] prevTxHexes length:', prevTxHexes.length);
-  
-  // Detailed element analysis
-  console.log('[DEBUG] === Element-by-element analysis ===');
-  for (let i = 0; i < prevTxHexes.length; i++) {
-    const element = prevTxHexes[i];
-    console.log(`  [${i}]:`);
-    console.log(`    Type: ${typeof element}`);
-    console.log(`    Value: ${element}`);
-    console.log(`    Is null: ${element === null}`);
-    console.log(`    Is undefined: ${element === undefined}`);
-    console.log(`    Is string: ${typeof element === 'string'}`);
-    console.log(`    Length: ${typeof element === 'string' ? element.length : 'N/A'}`);
-    console.log(`    First 30 chars: ${typeof element === 'string' ? element.substring(0, 30) + '...' : 'N/A'}`);
-  }
 
   const PROVER_URL = process.env.PROVER_API_URL || constants.PROVER_API_URL;
   const APP_VK = process.env.HARDCODED_APP_VK || constants.HARDCODED_APP_VK;
@@ -58,7 +51,6 @@ export async function generateUnsignedTransactions(
 
   let spellJson: any;
   if (request.type === 'mint-nft') {
-    // This now uses the anchorValue we added to the shared types 
     const result = buildMintNFT(request);
     spellJson = result.spell;
   } else if (request.type === 'mint-token') {
@@ -72,14 +64,6 @@ export async function generateUnsignedTransactions(
   
   // Create a safe version with validation
   const safePrevTxs = prevTxHexes.map((hex, index) => {
-    console.log(`[DEBUG] Processing element ${index}:`, {
-      value: hex,
-      type: typeof hex,
-      isString: typeof hex === 'string',
-      isNull: hex === null,
-      isUndefined: hex === undefined
-    });
-    
     // Validate each element before processing
     if (hex === null || hex === undefined) {
       console.error(`[ERROR] Element ${index} is null or undefined:`, hex);
@@ -98,7 +82,6 @@ export async function generateUnsignedTransactions(
     
     // Clean the hex string
     const cleanedHex = hex.replace(/[^0-9a-fA-F]/g, '');
-    console.log(`[DEBUG] Element ${index} cleaned: ${cleanedHex.length} chars, first 30: ${cleanedHex.substring(0, 30)}...`);
     
     return { bitcoin: cleanedHex };
   });
@@ -119,60 +102,147 @@ export async function generateUnsignedTransactions(
   // Debug the full request body (excluding large binary data)
   console.log('[DEBUG] === Constructed requestBody ===');
   console.log('[DEBUG] requestBody.prev_txs length:', requestBody.prev_txs.length);
-  console.log('[DEBUG] requestBody.prev_txs:', JSON.stringify(requestBody.prev_txs.map(tx => ({
-    bitcoin: `${tx.bitcoin.substring(0, 30)}... (${tx.bitcoin.length} chars)`
-  })), null, 2));
   console.log('[DEBUG] requestBody.funding_utxo:', requestBody.funding_utxo);
   console.log('[DEBUG] requestBody.funding_utxo_value:', requestBody.funding_utxo_value);
   console.log('[DEBUG] requestBody.change_address:', requestBody.change_address);
   console.log('[DEBUG] requestBody.fee_rate:', requestBody.fee_rate);
 
-  try {
-    console.log('[DEBUG] === Sending request to Prover API ===');
-    console.log('[DEBUG] Prover URL:', PROVER_URL);
-    console.log('[DEBUG] Request body size:', JSON.stringify(requestBody).length, 'bytes');
-    
-    const response = await axios.post(PROVER_URL, requestBody, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 300000 // 5-minute timeout for ZK proof generation 
-    });
+  // ========== RETRY LOGIC AS PER CHARMS DOCUMENTATION ==========
+  const MAX_RETRIES = 3;
+  const BASE_DELAY_MS = 2000; // Start with 2 seconds
+  const MAX_DELAY_MS = 30000; // Max 30 seconds delay
+  
+  let lastError: any = null;
+  
+  for (let retryCount = 0; retryCount <= MAX_RETRIES; retryCount++) {
+    try {
+      console.log(`\n[DEBUG] === Attempt ${retryCount + 1}/${MAX_RETRIES + 1} to Prover API ===`);
+      console.log('[DEBUG] Prover URL:', PROVER_URL);
+      console.log('[DEBUG] Request body size:', JSON.stringify(requestBody).length, 'bytes');
+      
+      // Calculate timeout based on retry count (increase with each retry)
+      const timeoutMs = Math.min(600000 * (retryCount + 1), 1800000); // Up to 30 minutes
+      
+      const response = await axios.post(PROVER_URL, requestBody, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: timeoutMs
+      });
 
-    console.log('[DEBUG] === Received response from Prover API ===');
-    console.log('[DEBUG] Response status:', response.status);
-    console.log('[DEBUG] Response data type:', typeof response.data);
-    console.log('[DEBUG] Response is array:', Array.isArray(response.data));
-    
-    if (Array.isArray(response.data)) {
-      const [commitTxHex, spellTxHex] = response.data;
-      console.log('[DEBUG] commitTxHex length:', commitTxHex?.length);
-      console.log('[DEBUG] spellTxHex length:', spellTxHex?.length);
-      console.log('[DEBUG] ===== END generateUnsignedTransactions (SUCCESS) =====\n');
-      return { commitTxHex, spellTxHex };
-    } else {
-      console.error('[ERROR] Prover API returned non-array response:', response.data);
-      throw new Error('Prover API returned invalid response format');
+      console.log('[DEBUG] === Received response from Prover API ===');
+      console.log('[DEBUG] Response status:', response.status);
+      
+      if (Array.isArray(response.data)) {
+        const [commitTxHex, spellTxHex] = response.data;
+        console.log('[DEBUG] commitTxHex length:', commitTxHex?.length);
+        console.log('[DEBUG] spellTxHex length:', spellTxHex?.length);
+        
+        // Validate response
+        if (!commitTxHex || !spellTxHex) {
+          throw new Error('Prover API returned empty transaction hexes');
+        }
+        
+        console.log('[DEBUG] ===== END generateUnsignedTransactions (SUCCESS) =====\n');
+        
+        // Store for secure signing as per Charms documentation
+        const result: ProverResult = { commitTxHex, spellTxHex };
+        
+        // Optionally store in secure cache for later signing
+        // storeTransactionPackage(result);
+        
+        return result;
+      } else {
+        throw new Error('Prover API returned invalid response format');
+      }
+      
+    } catch (error: any) {
+      lastError = error;
+      
+      console.error(`\n[DEBUG] ===== ATTEMPT ${retryCount + 1} FAILED =====`);
+      console.error('[ERROR] Error:', error.message);
+      
+      if (error.response) {
+        // HTTP error response (4xx, 5xx)
+        console.error('[ERROR] Response status:', error.response.status);
+        console.error('[ERROR] Response data:', error.response.data);
+        
+        // Don't retry on client errors (4xx)
+        if (error.response.status >= 400 && error.response.status < 500) {
+          console.error('[ERROR] Client error, not retrying');
+          break;
+        }
+        
+        // Retry on server errors (5xx) and timeouts
+        console.error('[ERROR] Server error or timeout, will retry if attempts remain');
+      } else if (error.request) {
+        // No response received (network error, timeout)
+        console.error('[ERROR] No response received (network/timeout)');
+      } else {
+        // Setup error
+        console.error('[ERROR] Request setup error:', error.message);
+        // Don't retry on setup errors
+        break;
+      }
+      
+      // Check if we should retry
+      if (retryCount < MAX_RETRIES) {
+        const delayMs = exponentialBackoffDelay(retryCount, BASE_DELAY_MS, MAX_DELAY_MS);
+        console.log(`[RETRY] Waiting ${delayMs}ms before retry ${retryCount + 2}/${MAX_RETRIES + 1}`);
+        await sleep(delayMs);
+      }
     }
-  } catch (error: any) {
-    console.error('\n[DEBUG] ===== PROVER API ERROR =====');
-    console.error('[ERROR] Axios error:', error.message);
-    console.error('[ERROR] Error code:', error.code);
-    console.error('[ERROR] Error config:', error.config?.url);
+  }
+  
+  // All retries failed
+  console.error('\n[DEBUG] ===== ALL RETRY ATTEMPTS FAILED =====');
+  
+  // Create informative error message
+  let errorMessage = 'Prover API failed after all retry attempts. ';
+  
+  if (lastError.response) {
+    errorMessage += `HTTP ${lastError.response.status}: ${JSON.stringify(lastError.response.data)}`;
+  } else if (lastError.code === 'ETIMEDOUT') {
+    errorMessage += 'Request timed out. The Charms prover may be under heavy load. ';
+    errorMessage += 'Consider running a local prover with `charms server` or increasing timeout.';
+  } else if (lastError.request) {
+    errorMessage += 'Network error: No response received from server.';
+  } else {
+    errorMessage += lastError.message;
+  }
+  
+  console.error('[DEBUG] Final error:', errorMessage);
+  console.error('[DEBUG] ===== END generateUnsignedTransactions (ERROR) =====\n');
+  
+  throw new Error(errorMessage);
+}
+
+/**
+ * Optional: Store transactions securely for later signing
+ * As per Charms documentation: "Store both transactions securely until they are signed and broadcast"
+ */
+function storeTransactionPackage(result: ProverResult): void {
+  try {
+    // Store in memory cache with timestamp
+    const transactionId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const transactionPackage = {
+      id: transactionId,
+      timestamp: new Date().toISOString(),
+      commitTxHex: result.commitTxHex,
+      spellTxHex: result.spellTxHex,
+      // You could also store in a database or secure storage
+    };
     
-    if (error.response) {
-      console.error('[ERROR] Response status:', error.response.status);
-      console.error('[ERROR] Response headers:', error.response.headers);
-      console.error('[ERROR] Response data:', error.response.data);
-    } else if (error.request) {
-      console.error('[ERROR] No response received. Request:', error.request);
+    // For now, log to console - in production, use secure storage
+    console.log(`[STORAGE] Transaction package stored with ID: ${transactionId}`);
+    console.log(`[STORAGE] Commit TX length: ${result.commitTxHex.length} chars`);
+    console.log(`[STORAGE] Spell TX length: ${result.spellTxHex.length} chars`);
+    
+    // Optionally store in session storage for the current user
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem(`charm_tx_${transactionId}`, JSON.stringify(transactionPackage));
     }
     
-    console.error('[DEBUG] ===== END generateUnsignedTransactions (ERROR) =====\n');
-    
-    // Create a more informative error message
-    const errorMessage = error.response?.data 
-      ? `Prover API failed: ${JSON.stringify(error.response.data)}`
-      : `Prover API failed: ${error.message}`;
-    
-    throw new Error(errorMessage);
+  } catch (storageError) {
+    console.warn('[WARNING] Failed to store transaction package:', storageError);
+    // Don't fail the main flow if storage fails
   }
 }

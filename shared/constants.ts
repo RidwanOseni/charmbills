@@ -8,7 +8,7 @@ export const HARDCODED_NFT_TICKER = "PROPLAN";
 export const PROVER_API_URL = "https://v8.charms.dev/spells/prove";
 
 // Default fee rate in sats/vB [8]
-export const DEFAULT_FEE_RATE = 3.5;
+export const DEFAULT_FEE_RATE = 2;
 
 // Minimum satoshis required for a Charms output [12, 13]
 export const MIN_OUTPUT_SATS = 1000;

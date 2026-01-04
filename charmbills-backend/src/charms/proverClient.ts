@@ -132,9 +132,40 @@ export async function generateUnsignedTransactions(
       console.log('[DEBUG] Response status:', response.status);
       
       if (Array.isArray(response.data)) {
-        const [commitTxHex, spellTxHex] = response.data;
-        console.log('[DEBUG] commitTxHex length:', commitTxHex?.length);
-        console.log('[DEBUG] spellTxHex length:', spellTxHex?.length);
+        let commitTxHex = response.data[0];
+        let spellTxHex = response.data[1];
+        
+        console.log('[DEBUG] Raw response types:', {
+          commitType: typeof commitTxHex,
+          commitHasBitcoin: commitTxHex && typeof commitTxHex === 'object' && 'bitcoin' in commitTxHex,
+          spellType: typeof spellTxHex,
+          spellHasBitcoin: spellTxHex && typeof spellTxHex === 'object' && 'bitcoin' in spellTxHex
+        });
+        
+        // ========== CRITICAL FIX: Extract hex from objects ==========
+        if (commitTxHex && typeof commitTxHex === 'object' && commitTxHex.bitcoin) {
+          console.log('[DEBUG] Extracting hex from commitTxHex object');
+          commitTxHex = commitTxHex.bitcoin;
+        }
+        
+        if (spellTxHex && typeof spellTxHex === 'object' && spellTxHex.bitcoin) {
+          console.log('[DEBUG] Extracting hex from spellTxHex object');
+          spellTxHex = spellTxHex.bitcoin;
+        }
+        
+        // Validate they are now strings
+        if (typeof commitTxHex !== 'string' || typeof spellTxHex !== 'string') {
+          console.error('[ERROR] Invalid hex format after extraction:', {
+            commitType: typeof commitTxHex,
+            spellType: typeof spellTxHex
+          });
+          throw new Error('Prover API returned invalid hex format after extraction');
+        }
+        
+        console.log('[DEBUG] Extracted hex lengths:', {
+          commitTxHex: commitTxHex?.length,
+          spellTxHex: spellTxHex?.length
+        });
         
         // Validate response
         if (!commitTxHex || !spellTxHex) {
@@ -146,11 +177,9 @@ export async function generateUnsignedTransactions(
         // Store for secure signing as per Charms documentation
         const result: ProverResult = { commitTxHex, spellTxHex };
         
-        // Optionally store in secure cache for later signing
-        // storeTransactionPackage(result);
-        
         return result;
       } else {
+        console.error('[ERROR] Prover API returned non-array response:', response.data);
         throw new Error('Prover API returned invalid response format');
       }
       
@@ -213,36 +242,4 @@ export async function generateUnsignedTransactions(
   console.error('[DEBUG] ===== END generateUnsignedTransactions (ERROR) =====\n');
   
   throw new Error(errorMessage);
-}
-
-/**
- * Optional: Store transactions securely for later signing
- * As per Charms documentation: "Store both transactions securely until they are signed and broadcast"
- */
-function storeTransactionPackage(result: ProverResult): void {
-  try {
-    // Store in memory cache with timestamp
-    const transactionId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const transactionPackage = {
-      id: transactionId,
-      timestamp: new Date().toISOString(),
-      commitTxHex: result.commitTxHex,
-      spellTxHex: result.spellTxHex,
-      // You could also store in a database or secure storage
-    };
-    
-    // For now, log to console - in production, use secure storage
-    console.log(`[STORAGE] Transaction package stored with ID: ${transactionId}`);
-    console.log(`[STORAGE] Commit TX length: ${result.commitTxHex.length} chars`);
-    console.log(`[STORAGE] Spell TX length: ${result.spellTxHex.length} chars`);
-    
-    // Optionally store in session storage for the current user
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem(`charm_tx_${transactionId}`, JSON.stringify(transactionPackage));
-    }
-    
-  } catch (storageError) {
-    console.warn('[WARNING] Failed to store transaction package:', storageError);
-    // Don't fail the main flow if storage fails
-  }
 }

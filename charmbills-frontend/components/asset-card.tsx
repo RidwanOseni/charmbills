@@ -13,20 +13,31 @@ interface AssetCardProps {
 }
 
 export default function AssetCard({ asset }: AssetCardProps) {
+  // PROFESSIONAL FIX: Convert Map to Array for React rendering
+  const charmsArray = asset.charms instanceof Map 
+    ? Array.from(asset.charms.entries()) 
+    : Object.entries(asset.charms);
+
   return (
     <div className="bg-card border border-border rounded-xl p-5 space-y-4 hover:border-accent/50 transition-all shadow-sm">
-      {Object.entries(asset.charms).map(([appIndex, content]: [string, any]) => {
-        // appIndex corresponds to the index in the 'apps' section of the spell [10, 11]
-        const appSpec = asset.spell.apps[appIndex];
-        const isNFT = appSpec.startsWith('n/'); // 'n' tag for NFTs [12, 13]
-        const isToken = appSpec.startsWith('t/'); // 't' tag for tokens [12, 13]
+      {charmsArray.map(([appIndex, content]: [any, any]) => {
+        // FIX: Search both the root and the .tx property for the apps definition
+        console.log("🛠️ App Index:", appIndex, "Full Spell Object:", asset.spell);
+        const apps = asset.spell.tx?.apps || asset.spell.apps;
+        const appSpec = apps ? apps[appIndex] : null;
+        console.log("📝 Found App Spec:", appSpec);
         
-        // Extracting IDs for display
+        if (!appSpec) return null;
+
+        const isNFT = appSpec.startsWith('n/'); // 'n' tag for NFTs
+        const isToken = appSpec.startsWith('t/'); // 't' tag for tokens
+        
+        // PROFESSIONAL FIX: appId is the middle part of "tag/id/vk" (Index 1)
         const specParts = appSpec.split('/');
-        const appId = specParts[15];
+        const appId = specParts[1]; 
 
         return (
-          <div key={appIndex} className="space-y-3">
+          <div key={appId} className="space-y-3">
             {isNFT && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-accent">
@@ -44,7 +55,7 @@ export default function AssetCard({ asset }: AssetCardProps) {
                     </span>
                   </div>
                 </div>
-                {/* Visualization of CHIP-420 metadata fields [16, 17] */}
+                {/* Visualization of CHIP-420 metadata fields */}
                 {content.iconUrl && (
                    <div className="mt-2 rounded-md overflow-hidden bg-muted aspect-video flex items-center justify-center">
                      <img 

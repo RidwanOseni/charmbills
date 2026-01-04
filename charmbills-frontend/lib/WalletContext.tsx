@@ -120,28 +120,39 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
                     sequence: input.sequence
                 });
             } else {
-                // 3. Metadata Assignment for preserved inputs (Fee or Anchor) [9, 10]
-                const context = isAnchor ? dualUtxoContext.anchor : dualUtxoContext.fee;
-                console.log(`   📦 PRESERVING: Input ${index} assigned to ${isAnchor ? 'ANCHOR' : 'FEE'} context (Value: ${context.value} sats)`);
+                // 3. Metadata Assignment for preserved inputs
+                const isAnchor = (rawTxid.toLowerCase() === anchorTxid.toLowerCase() || 
+                                  reversedTxid.toLowerCase() === anchorTxid.toLowerCase()) && 
+                                 input.index === parseInt(anchorVoutStr);
+
+                let amount: bigint;
+                let script: Uint8Array;
+
+                if (isAnchor) {
+                    amount = BigInt(dualUtxoContext.anchor.value);
+                    script = actualAnchorScript;
+                } else if (targetTxid !== feeTxid) { 
+                    // If we are in Step 2 (Spell), the non-target input is the COMMIT spend
+                    // Use the values we got from the finalized Step 1 transaction
+                    amount = BigInt(dualUtxoContext.commit.value); 
+                    script = dualUtxoContext.commit.script;
+                } else {
+                    amount = BigInt(dualUtxoContext.fee.value);
+                    script = payment.script;
+                }
 
                 const preservedInput: any = {
-                  txid: isAnchor ? anchorTxid : rawTxid,
+                    txid: rawTxid,
                     index: input.index,
-                    witnessUtxo: {
-                        amount: BigInt(context.value),
-                        // FIX: Use the actual script from the provenance hex, not your wallet script
-                        script: isAnchor ? actualAnchorScript : payment.script 
-                    },
+                    witnessUtxo: { amount, script },
+                    tapInternalKey: payment.tapInternalKey, // CRITICAL: Fixes "unknown input"
                     sequence: input.sequence
                 };
 
-                // 4. WITNESS GUARD: Prevent "empty finalScriptWitness" crash [11, 12]
                 const inputWitness = decoded.witnesses ? decoded.witnesses[index] : undefined;
-                if (inputWitness && Array.isArray(inputWitness) && inputWitness.length > 0) {
-                    console.log(`   🔗 ATTACHING: Witness data preserved for Input ${index}`);
+                if (inputWitness?.length > 0) {
                     preservedInput.finalScriptWitness = inputWitness;
                 }
-
                 psbtTx.addInput(preservedInput);
             }
         });
@@ -173,6 +184,34 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         ? (result.spellTxHex as any).bitcoin 
         : result.spellTxHex;
 
+        console.log('🔍 Debugging raw spell transaction:');
+        console.log('Spell raw hex length:', spellRaw.length);
+        console.log('Spell hex first 100 chars:', spellRaw.substring(0, 100) + '...');
+
+        try {
+          const debugSpellTx = btc.RawTx.decode(hexToBytes(spellRaw));
+          console.log('Inputs count:', debugSpellTx.inputs.length);
+          
+          debugSpellTx.inputs.forEach((input, i) => {
+            const txid = bytesToHex(input.hash || input.txid);
+            console.log(`Input ${i}:`, {
+              txid: txid,
+              vout: input.index,
+              hasWitness: debugSpellTx.witnesses?.[i]?.length > 0,
+              witnessLength: debugSpellTx.witnesses?.[i]?.length || 0
+            });
+          });
+          
+          console.log('Outputs count:', debugSpellTx.outputs.length);
+          debugSpellTx.outputs.forEach((output, i) => {
+            console.log(`Output ${i}:`, {
+              amount: output.amount,
+              scriptLength: output.script.length
+            });
+          });
+        } catch (debugError) {
+          console.error('Failed to decode spell transaction:', debugError);
+        }
       // Parse UTXOs from context
       const [feeTxid, feeVoutStr] = dualUtxoContext.fee.utxoId.split(':');
       const feeVout = parseInt(feeVoutStr);
@@ -227,28 +266,105 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       console.log('- Commit output amount:', commitOutput.amount.toString());
       console.log('- Commit output script length:', commitOutputScript.length);
 
+      // ========== CRITICAL FIX: Add commit output to dualUtxoContext ==========
+      // This is needed for the spell transaction buildTaprootPsbt
+      dualUtxoContext.commit = {
+        txid: commitTxId,
+        vout: 0,
+        value: Number(commitOutput.amount),
+        script: commitOutputScript
+      };
+
       // 4. SIGN SPELL TRANSACTION (Spends Commit Output 0)
       console.log('🔐 Step 2: Signing Spell Transaction...');
+      
+      // ========== FRIEND'S FIX START ==========
+      // 1. Get the actual anchor script from the hex we already have
+      const anchorTx = btc.RawTx.decode(hexToBytes(dualUtxoContext.anchor.hex));
+      const [anchorTxid, anchorVoutStr] = dualUtxoContext.anchor.utxoId.split(':');
+      const anchorVout = parseInt(anchorVoutStr);
+      const actualAnchorScript = anchorTx.outputs[anchorVout].script;
+
+      // 2. Build the PSBT targeting the Anchor UTXO (Friend's key fix)
       const spellPsbt = buildTaprootPsbt(
         spellRaw,
-        commitTxId, 0, Number(commitOutput.amount), commitOutputScript, // Target (Commit Output)
-        dualUtxoContext,  // Pass dual context (provides anchor UTXO data for preserved input)
+        anchorTxid, // TARGET: Anchor TxID (not commit output)
+        anchorVout, // TARGET: Anchor Vout
+        dualUtxoContext.anchor.value, // Anchor value
+        actualAnchorScript, // Using the decoded on-chain script
+        dualUtxoContext, 
         taprootPublicKey
       );
 
+      // 3. Request signature for Input 0 (the Anchor)
       const spellRes = await (window as any).LeatherProvider.request("signPsbt", {
         hex: spellPsbt,
         network: "testnet",
         broadcast: false,
-        signAtIndex: 1
+        signAtIndex: 0 
       });
 
       console.log('✅ Spell PSBT signed by wallet');
 
-      // Finalize spell transaction
-      const finalizedSpell = btc.Transaction.fromPSBT(hexToBytes(spellRes.result.hex));
-      finalizedSpell.finalize();
-      const signedSpellHex = bytesToHex(finalizedSpell.extract());
+// ========== COMPLETE MANUAL FINALIZATION FIX ==========
+// 1. Create the transaction object from the PSBT returned by the wallet
+// 1. Create the transaction object from the PSBT returned by Leather
+const spellTransaction = btc.Transaction.fromPSBT(hexToBytes(spellRes.result.hex));
+
+// 2. RE-ATTACH Input 1's witness (Charms Proof) - FIXED INDEX [1] not [8]
+const originalSpellTx = btc.RawTx.decode(hexToBytes(spellRaw));
+if (originalSpellTx.witnesses && originalSpellTx.witnesses[1]) {
+    spellTransaction.updateInput(1, { 
+        finalScriptWitness: originalSpellTx.witnesses[1] 
+    });
+    console.log('✅ Applied Input 1 witness via updateInput');
+} else {
+    console.error('❌ Could not find original witness for Input 1');
+    console.log('Available witnesses:', originalSpellTx.witnesses?.length || 0);
+    throw new Error('Missing Charms proof witness for Input 1');
+}
+
+// 3. MANUAL FINALIZATION for Input 0 (Wallet's Signature)
+const walletInputCopy = spellTransaction.getInput(0);
+let walletWitness: Uint8Array[] | undefined;
+
+if (walletInputCopy.tapKeySig) {
+    walletWitness = [walletInputCopy.tapKeySig];
+    console.log('✅ Using tapKeySig for Input 0');
+} else if (walletInputCopy.partialSig && walletInputCopy.partialSig.length > 0) {
+    // Schnorr signatures are usually at index 4, fallback to first
+    const schnorrSig = walletInputCopy.partialSig[4] || walletInputCopy.partialSig[0];
+    if (schnorrSig) {
+        walletWitness = [schnorrSig];
+        console.log('✅ Using partialSig for Input 0');
+    }
+}
+
+if (walletWitness) {
+    spellTransaction.updateInput(0, { 
+        finalScriptWitness: walletWitness 
+    });
+    console.log('✅ Applied Input 0 witness via updateInput');
+} else {
+    console.error('❌ No signature found for Input 0');
+    console.log('Input 0 debug:', {
+        hasTapKeySig: !!walletInputCopy.tapKeySig,
+        partialSigLength: walletInputCopy.partialSig?.length || 0,
+        partialSigKeys: walletInputCopy.partialSig ? Object.keys(walletInputCopy.partialSig) : []
+    });
+    throw new Error('Wallet did not provide signature for Input 0');
+}
+
+// 4. DEBUG: Verify updates were applied
+console.log('🔍 Post-update verification:', {
+    input0HasWitness: !!spellTransaction.getInput(0).finalScriptWitness,
+    input1HasWitness: !!spellTransaction.getInput(1).finalScriptWitness
+});
+
+// 5. Extract final hex
+const signedSpellHex = bytesToHex(spellTransaction.extract());
+console.log('✅ Transaction extracted successfully, hex length:', signedSpellHex.length);
+      // ========== END MANUAL FINALIZATION FIX ==========
 
       console.log('📦 Ready for broadcast:');
       console.log('- Signed commit hex length:', signedCommitHex.length);

@@ -26,6 +26,7 @@ export default function DashboardPage() {
       setIsScanning(true);
       try {
         const assets = await scanAddressForCharms(address);
+        console.log("🔍 SCANNED ASSETS:", assets);
         setOnChainAssets(assets);
       } catch (err) {
         console.error("Scan failed", err);

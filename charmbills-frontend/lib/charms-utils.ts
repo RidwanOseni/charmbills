@@ -197,6 +197,10 @@ export async function getWalletStatus(address: string): Promise<{
 
 export async function scanAddressForCharms(address: string) {
   try {
+    // 1. PROFESSIONAL FIX: Initialize the WASM module
+    // This populates the internal 'wasm' variable needed for extraction
+    await wasm.default(); 
+
     const utxoResponse = await axios.get(`${MEMPOOL_API}/address/${address}/utxo`);
     const utxos = utxoResponse.data;
     const charmsAssets = [];
@@ -205,11 +209,19 @@ export async function scanAddressForCharms(address: string) {
       try {
         const txHexResponse = await axios.get(`${MEMPOOL_API}/tx/${utxo.txid}/hex`);
         const txJson = { bitcoin: txHexResponse.data };
+
+        // This call will now succeed because wasm.default() was called above
         const spellData = wasm.extractAndVerifySpell(txJson, false);
 
         if (spellData && spellData.tx) {
           const outputCharms = spellData.tx.outs[utxo.vout];
-          if (outputCharms && Object.keys(outputCharms).length > 0) {
+
+          // 2. PROFESSIONAL FIX: Use a more robust check for Maps
+          // Check for the '.size' property instead of 'instanceof Map'
+          const isMap = outputCharms && typeof outputCharms.size === 'number';
+          const isObject = outputCharms && !isMap && Object.keys(outputCharms).length > 0;
+
+          if (isMap || isObject) {
             charmsAssets.push({
               utxoId: `${utxo.txid}:${utxo.vout}`,
               amount: utxo.value,
@@ -218,7 +230,11 @@ export async function scanAddressForCharms(address: string) {
             });
           }
         }
-      } catch (e) { continue; }
+      } catch (e) {
+        // Log errors during development so they aren't silent
+        console.error(`Error scanning UTXO ${utxo.txid}:`, e);
+        continue; 
+      }
     }
     return charmsAssets;
   } catch (error) {

@@ -4,6 +4,8 @@ import { SpellRequest, ProverResult } from '../../../shared/types';
 import * as constants from '../../../shared/constants';
 import { buildMintNFT } from './buildMintNFT';
 import { buildMintToken } from './buildMintToken';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
@@ -44,7 +46,19 @@ export async function generateUnsignedTransactions(
 
   const PROVER_URL = process.env.PROVER_API_URL || constants.PROVER_API_URL;
   const APP_VK = process.env.HARDCODED_APP_VK || constants.HARDCODED_APP_VK;
-  const APP_BINARY = process.env.APP_BINARY_BASE64;
+  
+  // ========== MODIFIED: Read app binary from file ==========
+  const binaryPath = path.resolve(process.cwd(), 'src/app-binary.b64');
+  console.log('[DEBUG] Reading app binary from:', binaryPath);
+  
+  let APP_BINARY: string;
+  try {
+    APP_BINARY = fs.readFileSync(binaryPath, 'utf-8').trim();
+    console.log('[DEBUG] App binary loaded successfully, length:', APP_BINARY.length);
+  } catch (error) {
+    console.error('[ERROR] Failed to read app binary file:', error);
+    throw new Error(`APP_BINARY_BASE64 missing: Could not read file at ${binaryPath}`);
+  }
 
   if (!PROVER_URL) throw new Error("PROVER_API_URL not configured.");
   if (!APP_BINARY) throw new Error("APP_BINARY_BASE64 missing from .env.");

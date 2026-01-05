@@ -199,7 +199,7 @@ export async function scanAddressForCharms(address: string) {
   try {
     // 1. PROFESSIONAL FIX: Initialize the WASM module
     // This populates the internal 'wasm' variable needed for extraction
-    await wasm.default(); 
+    await wasm.default('/charms_lib_bg.wasm'); 
 
     const utxoResponse = await axios.get(`${MEMPOOL_API}/address/${address}/utxo`);
     const utxos = utxoResponse.data;

@@ -230,9 +230,12 @@ export async function scanAddressForCharms(address: string) {
             });
           }
         }
-      } catch (e) {
-        // Log errors during development so they aren't silent
-        console.error(`Error scanning UTXO ${utxo.txid}:`, e);
+      } catch (e: any) {
+        // PRODUCTION FIX: Only log actual network or system errors.
+        // Ignore "no control block" or "invalid" errors as they just mean the UTXO isn't a Charm.
+        if (!e.message?.includes("no control block") && !e.message?.includes("invalid length")) {
+          console.warn(`System error scanning UTXO ${utxo.txid}:`, e.message);
+        }
         continue; 
       }
     }

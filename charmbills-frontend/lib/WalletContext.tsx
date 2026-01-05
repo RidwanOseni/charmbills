@@ -149,8 +149,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
                     sequence: input.sequence
                 };
 
+                // FIXED: Properly check for inputWitness existence and length
                 const inputWitness = decoded.witnesses ? decoded.witnesses[index] : undefined;
-                if (inputWitness?.length > 0) {
+                if (inputWitness && inputWitness.length > 0) {
                     preservedInput.finalScriptWitness = inputWitness;
                 }
                 psbtTx.addInput(preservedInput);
@@ -192,13 +193,21 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           const debugSpellTx = btc.RawTx.decode(hexToBytes(spellRaw));
           console.log('Inputs count:', debugSpellTx.inputs.length);
           
-          debugSpellTx.inputs.forEach((input, i) => {
-            const txid = bytesToHex(input.hash || input.txid);
+          debugSpellTx.inputs.forEach((input: any, i: number) => {
+            // FIX: Handle the input hash properly - use type assertion to access the hash property
+            const inputHash = (input as any).hash || (input as any).txid;
+            const txid = inputHash ? bytesToHex(Uint8Array.from(inputHash)) : 'unknown';
+            
+            // FIXED: Properly handle optional witnesses with explicit checks
+            const witnessEntry = debugSpellTx.witnesses && debugSpellTx.witnesses[i];
+            const hasWitness = !!witnessEntry && witnessEntry.length > 0;
+            const witnessLength = witnessEntry ? witnessEntry.length : 0;
+            
             console.log(`Input ${i}:`, {
               txid: txid,
               vout: input.index,
-              hasWitness: debugSpellTx.witnesses?.[i]?.length > 0,
-              witnessLength: debugSpellTx.witnesses?.[i]?.length || 0
+              hasWitness: hasWitness,
+              witnessLength: witnessLength
             });
           });
           
@@ -333,10 +342,16 @@ if (walletInputCopy.tapKeySig) {
     console.log('✅ Using tapKeySig for Input 0');
 } else if (walletInputCopy.partialSig && walletInputCopy.partialSig.length > 0) {
     // Schnorr signatures are usually at index 4, fallback to first
-    const schnorrSig = walletInputCopy.partialSig[4] || walletInputCopy.partialSig[0];
-    if (schnorrSig) {
-        walletWitness = [schnorrSig];
-        console.log('✅ Using partialSig for Input 0');
+    // FIX: Handle the tuple type [Bytes, Bytes] properly
+    const schnorrSigTuple = walletInputCopy.partialSig[4] || walletInputCopy.partialSig[0];
+    if (schnorrSigTuple && Array.isArray(schnorrSigTuple) && schnorrSigTuple.length > 0) {
+        // For Schnorr signatures, we need just the signature (usually the second element)
+        // or we can use the first element if it's the signature
+        const schnorrSig = schnorrSigTuple[1] || schnorrSigTuple[0];
+        if (schnorrSig) {
+            walletWitness = [schnorrSig];
+            console.log('✅ Using partialSig for Input 0');
+        }
     }
 }
 

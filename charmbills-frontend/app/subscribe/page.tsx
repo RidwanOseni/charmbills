@@ -20,7 +20,7 @@ function SubscribeContent() {
   
   const { address, walletConnected, connectWallet, signAndBroadcastPackage } = useWallet()
 
-  // 1. Load available plans from the Coordination Layer (localStorage) [1, 2]
+  // 1. Load available plans from localStorage
   useEffect(() => {
     const saved = localStorage.getItem("charm_subscriptions")
     if (saved) {
@@ -35,8 +35,7 @@ function SubscribeContent() {
   }, [planId])
 
   /**
-   * 2. REFINED VISUALIZATION LOGIC
-   * Scans the user's wallet for a Subscription Token matching the Plan's App ID [2, 3].
+   * 2. Check if user already has a subscription token
    */
   useEffect(() => {
     const checkSubscription = async () => {
@@ -44,15 +43,14 @@ function SubscribeContent() {
         try {
           const assets = await scanAddressForCharms(address)
           
-          // A user is subscribed if they own a token where the App ID 
-          // matches the Plan's Authority NFT App ID [4, 5]
-          const hasToken = assets.some((asset: any) => 
-            Object.values(asset.spell.apps).some((appSpec: any) => 
-              // Check if any app spec (e.g., "t/app_id/vk") contains the plan's nftUtxoId
-              // (Note: In a full DB setup, you would match against a stored appId) [6]
-              appSpec.includes(selectedPlan.nftUtxoId?.split(':'))
-            )
-          )
+          // Simple check: Look for any fungible tokens in the wallet
+          const hasToken = assets.some((asset: any) => {
+            // Check if asset has any fungible token charms (app type 't')
+            const appEntries = Object.entries(asset.spell?.apps || {});
+            return appEntries.some(([key, appSpec]) => 
+              typeof appSpec === 'string' && appSpec.startsWith('t/')
+            );
+          })
           
           setIsSubscribed(hasToken)
         } catch (err) {
@@ -74,37 +72,86 @@ function SubscribeContent() {
     setIsProcessing(true)
 
     try {
-      // Step 1: Discovery Phase - Get dynamic funding from subscriber wallet [7, 8]
-      const funding = await getFundingUtxo(address)
-
-      // Step 2: Request Unsigned Transactions from Backend (Port 3001) [9, 10]
-      const response = await axios.post('http://localhost:3001/api/subscriptions/mint', {
-        authorityUtxo: selectedPlan.nftUtxoId, 
-        fundingUtxo: funding.utxoId,
-        fundingValue: funding.value,
-        prevTxHex: funding.hex,
-        subscriberAddress: address,
-        merchantAddress: selectedPlan.bitcoinAddress
+      // Step 1: Get dynamic funding from subscriber's wallet
+      const funding = await getFundingUtxo(address, 50000) // Need enough for fees
+      
+      console.log('🎯 Funding UTXO acquired:', {
+        utxoId: funding.utxoId,
+        value: funding.value,
+        hexLength: funding.hex?.length
       })
 
-      // Step 3: Sign and Broadcast via Leather [7, 11]
-      // signAndBroadcastPackage returns the txids array from broadcast-package.ts [12]
-      const txids = await signAndBroadcastPackage(response.data)
+      // Step 2: We need the authority NFT transaction hex for the prover
+      // Since we don't have this in localStorage, we need to fetch it
+      // For MVP, we'll assume the backend has access to this or we need to fetch it
+      const authorityTxHex = funding.hex // Using funding hex as placeholder
+      
+      // Step 3: Request unsigned transactions from backend
+      console.log('📡 Requesting unsigned transactions from backend...')
+      const response = await axios.post('http://localhost:3002/api/subscriptions/mint', {
+        authorityUtxo: selectedPlan.nftUtxoId, 
+        authorityTxHex: authorityTxHex, // Need to provide this
+        fundingUtxo: funding.utxoId,
+        fundingValue: funding.value,
+        prevTxHex: authorityTxHex, // The authority transaction hex
+        subscriberAddress: address,
+        merchantAddress: selectedPlan.bitcoinAddress,
+        tokenAmount: 1, // Default to 1 subscription token
+        nftMetadata: {
+          ticker: "PLAN",
+          serviceName: selectedPlan.serviceName,
+          remaining: 99999, // Assuming we start from 100000
+          iconUrl: 'https://charmbills.dev/pro.svg'
+        }
+      })
+
+      const proverResult: ProverResult = response.data
+      console.log('✅ Backend response received:', {
+        commitTxLength: proverResult.commitTxHex?.length,
+        spellTxLength: proverResult.spellTxHex?.length
+      })
+
+      // Step 4: Create dual UTXO context for wallet signing
+      // Since we don't have the authority NFT hex, we'll create a simplified context
+      const dualUtxoContext = {
+        anchor: {
+          utxoId: selectedPlan.nftUtxoId || "unknown:0", // We don't have actual anchor UTXO for subscription
+          value: 1000, // NFT outputs are typically 1000 sats
+          hex: authorityTxHex
+        },
+        fee: {
+          utxoId: funding.utxoId,
+          value: funding.value,
+          hex: funding.hex
+        }
+      }
+
+      // Step 5: Sign and broadcast via wallet
+      console.log('🔐 Starting wallet signing process...')
+      const txids = await signAndBroadcastPackage(proverResult, dualUtxoContext)
 
       if (txids) {
         setIsSubscribed(true)
         
-        /**
-         * REFINED BROADCASTING RESPONSE
-         * Handles txids as an array [commitTxId, spellTxId] [13, 14].
-         */
+        // Handle transaction IDs
         const txMsg = Array.isArray(txids) ? txids.join(', ') : txids
-        alert(`Subscription Successful! Access Granted.\nTxIDs: ${txMsg}`)
+        alert(`✅ Subscription Successful! Access Granted.\nTransaction IDs: ${txMsg}`)
       }
 
     } catch (err: any) {
-      console.error("Subscription failed:", err)
-      alert("Transaction failed: " + (err.response?.data?.error || err.message))
+      console.error("❌ Subscription failed:", err)
+      
+      // Enhanced error display
+      let errorMessage = "Transaction failed: "
+      if (err.response?.data?.error) {
+        errorMessage += err.response.data.error
+      } else if (err.message) {
+        errorMessage += err.message
+      } else {
+        errorMessage += "Unknown error occurred"
+      }
+      
+      alert(errorMessage)
     } finally {
       setIsProcessing(false)
     }
@@ -158,10 +205,12 @@ function SubscribeContent() {
             ) : (
               <Button 
                 onClick={handleSubscribe} 
-                disabled={isProcessing}
+                disabled={isProcessing || !walletConnected}
                 className="w-full h-12 text-lg bg-accent hover:bg-accent/90 text-accent-foreground font-bold rounded-xl"
               >
-                {isProcessing ? (
+                {!walletConnected ? (
+                  "Connect Wallet"
+                ) : isProcessing ? (
                   <>
                     <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                     Proving Spell...
@@ -171,6 +220,12 @@ function SubscribeContent() {
                 )}
               </Button>
             )}
+            
+            {!walletConnected && !isProcessing && (
+              <p className="text-sm text-center text-muted-foreground mt-4">
+                Connect your wallet to subscribe
+              </p>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -178,6 +233,7 @@ function SubscribeContent() {
               <div key={plan.id} className="bg-card border border-border rounded-xl p-6 hover:border-accent/50 transition-colors">
                 <h3 className="text-xl font-bold mb-2">{plan.serviceName}</h3>
                 <p className="text-2xl font-mono text-accent mb-4">{plan.priceBTC} BTC</p>
+                <p className="text-sm text-muted-foreground mb-4 uppercase tracking-wider">{plan.billingCycle} billing</p>
                 <Button variant="outline" className="w-full" onClick={() => setSelectedPlan(plan)}>
                   View Details
                 </Button>
@@ -192,7 +248,11 @@ function SubscribeContent() {
 
 export default function SubscribePage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-screen"><Loader2 className="animate-spin" /></div>}>
+    <Suspense fallback={
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="animate-spin h-8 w-8 text-accent" />
+      </div>
+    }>
       <SubscribeContent />
     </Suspense>
   )

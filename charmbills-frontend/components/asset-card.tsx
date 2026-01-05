@@ -8,6 +8,10 @@ interface AssetCardProps {
     charms: Record<string, any>;
     spell: {
       apps: Record<string, string>;
+      app_public_inputs?: any; // Add this line to fix the TypeScript error
+      tx?: {
+        apps?: Record<string, string>;
+      };
     };
   };
 }
@@ -36,7 +40,8 @@ export default function AssetCard({ asset }: AssetCardProps) {
         console.log("Is Apps a Map?:", asset.spell.apps instanceof Map);
         console.log("RAW CONTENT ENTRIES:", JSON.stringify(contentEntries, null, 2)); // PROFESSIONAL LOGGING
         
-        const publicInputs = asset.spell.app_public_inputs;
+        // This is what was working for you - keep it exactly as is
+        const publicInputs = asset.spell.app_public_inputs; // This line is fine now
         let appSpec: string | undefined;
 
         if (publicInputs instanceof Map) {

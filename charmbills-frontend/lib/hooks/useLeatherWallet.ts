@@ -1,5 +1,14 @@
 import { useState, useCallback } from 'react';
 
+// Add type declaration for LeatherProvider
+declare global {
+  interface Window {
+    LeatherProvider?: {
+      request: (method: string, params?: any) => Promise<any>;
+    };
+  }
+}
+
 interface WalletState {
   address: string | null;
   publicKey: string | null;
